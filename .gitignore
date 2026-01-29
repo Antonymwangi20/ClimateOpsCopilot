@@ -37,3 +37,26 @@ node_modules/
 .env.*.local
 
 package-lock.json
+
+# Large files
+*.zip
+*.exe
+*.msi
+*.tar.gz
+
+# Test files and data
+test-image.tiff
+test-*.png
+test-*.jpg
+
+# AWS CLI artifacts
+awscliv2.zip
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
