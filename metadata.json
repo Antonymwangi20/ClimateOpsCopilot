@@ -1,0 +1,7 @@
+{
+  "name": "Climate Ops Copilot",
+  "description": "An agentic, multimodal AI brain for real-world climate operations. Fuses satellite imagery, weather data, and policy documents into actionable emergency response plans using Gemini 3 Deep Think.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
