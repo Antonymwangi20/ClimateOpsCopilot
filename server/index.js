@@ -182,8 +182,14 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
                 type: Type.OBJECT,
                 properties: {
                   type: { type: Type.STRING },
-                  geometry: { type: Type.OBJECT },
-                  properties: { type: Type.OBJECT }
+                  geometry: { 
+                    type: Type.OBJECT,
+                    additionalProperties: true 
+                  },
+                  properties: { 
+                    type: Type.OBJECT,
+                    additionalProperties: true 
+                  }
                 }
               }
             },
@@ -306,8 +312,11 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
     }
 
     if (sentinelHubUrl && !tokenToUse) {
-      console.warn('Sentinel Hub processing URL is set but no access token or client credentials were available. Provide `SENTINEL_HUB_ACCESS_TOKEN` or `SENTINEL_HUB_CLIENT_ID/SECRET`, or pass `token` in the POST body.');
-      alert('Sentinel Hub access token or client credentials not configured. Please set SENTINEL_HUB_ACCESS_TOKEN or SENTINEL_HUB_CLIENT_ID and SENTINEL_HUB_CLIENT_SECRET in your .env.local file.');
+      console.warn('Sentinel Hub: No access token or client credentials configured');
+        return res.status(400).json({ 
+          error: 'Sentinel Hub not configured', 
+          detail: 'Provide SENTINEL_HUB_ACCESS_TOKEN or SENTINEL_HUB_CLIENT_ID/SECRET' 
+        });
     }
 
     if (sentinelHubUrl && tokenToUse) {
