@@ -8,57 +8,33 @@ export interface WeatherData {
   description?: string;
 }
 
-export const fetchWeatherData = async (location: string): Promise<WeatherData> => {
-  // Vite exposes env vars via import.meta.env with the VITE_ prefix
-  const apiKey = (import.meta as any).env?.VITE_OPENWEATHER_API_KEY;
+const API_BASE = import.meta.env.VITE_WORKER_API || 'http://localhost:4000';
 
-  if (!apiKey) {
-    console.warn('OpenWeather API key not configured (VITE_OPENWEATHER_API_KEY). Returning placeholder data.');
-    return {
-      temperature: 0,
-      rainfall: '0mm',
-      windSpeed: 'N/A',
-      windDirection: 'N/A'
-    };
-  }
-
+export const fetchWeatherData = async (lat: number, lon: number): Promise<WeatherData> => {
   try {
-    const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&appid=${apiKey}&units=metric`;
-    const weatherResponse = await fetch(weatherUrl);
-    if (!weatherResponse.ok) {
-      console.error('OpenWeather API returned', weatherResponse.status, await weatherResponse.text());
-      return {
-        temperature: 0,
-        rainfall: '0mm',
-        windSpeed: 'N/A',
-        windDirection: 'N/A'
-      };
+    const response = await fetch(
+      `${API_BASE}/api/weather?lat=${lat}&lon=${lon}`
+    );
+    
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('Weather proxy error:', error);
+      return getPlaceholderData();
     }
-
-    const weatherData = await weatherResponse.json();
-    const windDegrees = (weatherData.wind && weatherData.wind.deg) || 0;
-    const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-    const windDirectionIndex = Math.round(windDegrees / 22.5) % 16;
-    const windDirection = directions[windDirectionIndex];
-
-    const rainfall = weatherData.rain?.['1h'] ? `${Math.round(weatherData.rain['1h'] * 10) / 10}mm` : '0mm';
-
-    return {
-      temperature: Math.round(weatherData.main.temp),
-      rainfall,
-      windSpeed: `${Math.round(weatherData.wind?.speed || 0)} m/s`,
-      windDirection,
-      humidity: weatherData.main?.humidity,
-      pressure: weatherData.main?.pressure,
-      description: weatherData.weather?.[0]?.main || 'Unknown'
-    };
+    
+    return await response.json();
   } catch (err) {
-    console.error('Failed to fetch weather data:', err);
-    return {
-      temperature: 0,
-      rainfall: '0mm',
-      windSpeed: 'N/A',
-      windDirection: 'N/A'
-    };
+    console.error('Failed to fetch weather:', err);
+    return getPlaceholderData();
   }
 };
+
+function getPlaceholderData(): WeatherData {
+  return {
+    temperature: 0,
+    rainfall: '0mm',
+    windSpeed: 'N/A',
+    windDirection: 'N/A',
+    description: 'Unknown'
+  };
+}

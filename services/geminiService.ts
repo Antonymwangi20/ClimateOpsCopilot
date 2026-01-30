@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { AgentStatus, ClimatePlan } from "../types";
-import { fetchWeatherData } from "./weatherService";
+import { WeatherData } from "./weatherService";
 
 // Utility for retrying a promise-returning function with exponential backoff.
 
@@ -29,6 +29,7 @@ async function withRetry<T>(
 
 export const generateAgenticPlan = async (
   location: string,
+  weatherData: WeatherData,
   imageInput?: string, // base64
   docInput?: string,
   onStatusChange?: (status: AgentStatus) => void
@@ -36,10 +37,6 @@ export const generateAgenticPlan = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
 
   if (onStatusChange) onStatusChange(AgentStatus.OBSERVING);
-  
-  // Fetch real weather data from OpenWeather
-  const weatherData = await fetchWeatherData(location);
-  await new Promise(r => setTimeout(r, 200));
   
   if (onStatusChange) onStatusChange(AgentStatus.ORIENTING);
 

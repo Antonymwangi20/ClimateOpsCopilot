@@ -9,9 +9,14 @@ import { Server as IOServer } from 'socket.io';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import { GoogleGenAI, Type } from '@google/genai';
+import rateLimit from 'express-rate-limit';
+
 
 import { preprocessFile } from './preprocess.js';
 import { generatePolygons } from './polygons.js';
+
+const weatherCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 const app = express();
 // Increase body parser limits to allow larger payloads from clients (adjust if needed)
@@ -110,6 +115,68 @@ const io = new IOServer(httpServer, { cors: { origin: '*' } });
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
   socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
+});
+
+const weatherLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 weather requests per windowMs
+  message: 'Too many weather requests from this IP'
+});
+
+function calculateWindDirection(deg = 0) {
+  const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+  return directions[Math.round(deg / 22.5) % 16];
+}
+
+app.get('/api/weather', weatherLimiter, async (req, res) => {
+  const { lat, lon } = req.query;
+  
+  if (!lat || !lon) {
+    return res.status(400).json({ error: 'lat and lon required' });
+  }
+
+  // Check cache
+  const cacheKey = `${lat},${lon}`;
+  const cached = weatherCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return res.json(cached.data);
+  }
+
+  const apiKey = process.env.OPENWEATHER_API_KEY;
+  
+  if (!apiKey) {
+    console.error('OPENWEATHER_API_KEY not set in server .env');
+    return res.status(500).json({ error: 'Weather service misconfigured' });
+  }
+
+  try {
+    const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric`;
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      throw new Error(`OpenWeather ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    const weatherData = {
+      temperature: Math.round(data.main.temp),
+      rainfall: data.rain?.['1h'] ? `${Math.round(data.rain['1h'] * 10) / 10}mm` : '0mm',
+      windSpeed: `${Math.round(data.wind?.speed || 0)} m/s`,
+      windDirection: calculateWindDirection(data.wind?.deg),
+      humidity: data.main.humidity,
+      pressure: data.main.pressure,
+      description: data.weather?.[0]?.main || 'Unknown'
+    };
+
+    // Cache it
+    weatherCache.set(cacheKey, { data: weatherData, timestamp: Date.now() });
+    
+    res.json(weatherData);
+  } catch (error) {
+    console.error('Weather fetch failed:', error);
+    res.status(502).json({ error: 'Failed to fetch weather data' });
+  }
 });
 
 // Debug config endpoint

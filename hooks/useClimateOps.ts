@@ -1,10 +1,7 @@
-
 import { useState, useEffect } from 'react';
 import { AgentStatus, ClimatePlan } from '../types';
-import { generateAgenticPlan } from '../services/geminiService';
 import { fetchWeatherData } from '../services/weatherService';
 
-// API base URL: use env var for production, fallback to localhost:4000 for local dev
 const API_BASE = import.meta.env.VITE_WORKER_API || 'http://localhost:4000';
 
 export const useClimateOps = () => {
@@ -16,8 +13,7 @@ export const useClimateOps = () => {
   const [isCrisisEnabled, setIsCrisisEnabled] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([25.7617, -80.1918]);
 
-  // When the `location` text changes, attempt a lightweight geocode (Nominatim)
-  // and pan the map to the first result. Debounced to avoid spamming the API.
+  // Geocoding effect remains unchanged (debounced)
   useEffect(() => {
     if (!location || location.trim().length === 0) return;
     let cancelled = false;
@@ -36,24 +32,23 @@ export const useClimateOps = () => {
           if (!Number.isNaN(lat) && !Number.isNaN(lon)) setMapCenter([lat, lon]);
         }
       } catch (e) {
-        // ignore geocoding errors
         console.warn('Geocode failed', e);
       }
     }, 700);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [location]);
 
-
   const startAnalysis = async () => {
     setLoading(true);
     setAgentStatus(AgentStatus.OBSERVING);
+    
+    const [lat, lon] = mapCenter;
+    
     try {
       // compute bbox around current map center (~15km buffer)
-      const [lat, lon] = mapCenter;
-      const delta = 0.15; // ~15km rough
+      const delta = 0.15;
       const bbox = [lon - delta, lat - delta, lon + delta, lat + delta];
       
-      // Use a date 2-3 days in the past (Sentinel-2 has daily/near-daily coverage)
       const today = new Date();
       const recentDate = new Date(today);
       recentDate.setDate(recentDate.getDate() - 3);
@@ -62,7 +57,6 @@ export const useClimateOps = () => {
       // 1) ingest
       let ingestResp: Response;
       if (selectedImage) {
-        // Send as multipart form data with the selected image file
         const formData = new FormData();
         formData.append('image', selectedImage);
         formData.append('bbox', JSON.stringify(bbox));
@@ -72,7 +66,6 @@ export const useClimateOps = () => {
           body: formData
         });
       } else {
-        // Send as JSON with Sentinel Hub request
         ingestResp = await fetch(`${API_BASE}/api/ingest`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ bbox, date })
@@ -83,8 +76,6 @@ export const useClimateOps = () => {
         throw new Error(`Ingest failed: ${txt || ingestResp.status}`);
       }
       const ingestData = await ingestResp.json();
-
-      // derive filename from returned path
       const ingestPath: string = ingestData.path || '';
       const ingestFilename = ingestPath.split('/').pop();
 
@@ -99,7 +90,7 @@ export const useClimateOps = () => {
         throw new Error(`Preprocess failed: ${txt || preprocessResp.status}`);
       }
       const preprocessData = await preprocessResp.json();
-      const processedFilename = preprocessData.outFilename || preprocessData.outFilename || (preprocessData.outFilename);
+      const processedFilename = preprocessData.outFilename;
 
       // 3) polygons
       setAgentStatus(AgentStatus.DECIDING);
@@ -113,13 +104,13 @@ export const useClimateOps = () => {
       }
       const polygonsData = await polygonsResp.json();
 
-      // 4) fetch weather and build plan
+      // 4) fetch weather 
       setAgentStatus(AgentStatus.ACTING);
-      const weather = await fetchWeatherData(location).catch(() => null);
+      const weather = await fetchWeatherData(lat, lon).catch(() => null);
 
       const weatherConfidence = weather && (weather.temperature !== 0 || weather.rainfall !== '0mm') ? 70 : 45;
 
-      // Build a minimal plan using obtained polygons (convert lon,lat → lat,lon for Leaflet)
+      // Build polygons for Leaflet (convert lon,lat → lat,lon)
       const collection = polygonsData.collection;
       const floodPolygons: [number, number][][] = [];
       if (collection && collection.features) {
@@ -131,21 +122,16 @@ export const useClimateOps = () => {
         }
       }
 
-      // Calculate satellite confidence based on imagery size and polygon count
-      // Larger imagery = more detail = higher confidence (100KB+ is strong)
+      // Confidence calculations
       const imageryQuality = ingestData.size ? Math.min(100, 30 + (ingestData.size / 5000)) : 65;
-      const polygonConfidence = Math.min(90, 40 + (floodPolygons.length * 8)); // More polygons = more confident extraction
+      const polygonConfidence = Math.min(90, 40 + (floodPolygons.length * 8));
       const satelliteConfidence = Math.round((imageryQuality + polygonConfidence) / 2);
-
-      // Documents/policy confidence based on available grounding URLs
       const documentConfidence = (ingestData.source ? 40 : 20) + (floodPolygons.length > 0 ? 20 : 0);
-
-      // Overall confidence is weighted average: satellite (40%), weather (35%), documents (25%)
+      
       const overallConfidence = Math.round(
         (satelliteConfidence * 0.4) + (weatherConfidence * 0.35) + (documentConfidence * 0.25)
       );
 
-      // Generate a descriptive summary based on actual data
       const polygonCount = floodPolygons.length;
       const weatherDesc = weather 
         ? `Conditions: ${weather.temperature}°C, ${weather.rainfall} rainfall, ${weather.windSpeed} ${weather.windDirection} winds.`
@@ -162,7 +148,7 @@ export const useClimateOps = () => {
         summary,
         reasoningTrace,
         overallConfidence,
-        weather: weather || { temperature: 0, rainfall: '0mm', windSpeed: 'N/A', windDirection: 'N/A' },
+        weather: weather || { temperature: 0, rainfall: '0mm', windSpeed: 'N/A', windDirection: 'N/A', description: 'Unknown' },
         checklists: [],
         confidenceMetrics: { satellite: satelliteConfidence, weather: weatherConfidence, documents: documentConfidence },
         floodPolygons,
@@ -171,27 +157,33 @@ export const useClimateOps = () => {
 
       setActivePlan(plan);
 
-      // After building the local plan, call the server Gemini bridge to get an AI-augmented plan
+      // 5) Call server for AI-augmented plan (pass weather data)
       try {
         setAgentStatus(AgentStatus.OBSERVING);
         const aiResp = await fetch(`${API_BASE}/api/gemini-plan`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ location, floodPolygons: floodPolygons, weather: plan.weather, confidenceMetrics: plan.confidenceMetrics })
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            location, 
+            floodPolygons, 
+            weather: plan.weather, // Passed to server
+            confidenceMetrics: plan.confidenceMetrics 
+          })
         });
+        
         if (aiResp.ok) {
           const aiPlan = await aiResp.json();
           setActivePlan(aiPlan);
         } else {
           const txt = await aiResp.text().catch(() => null);
           console.warn('Gemini plan generation failed:', txt || aiResp.status);
-          // attach error to the existing plan so UI shows the raw AI panel for auditing
           setActivePlan({ ...plan, rawAIResponse: { text: txt || `HTTP ${aiResp.status}`, candidates: null } });
-          alert(`Gemini plan generation failed: ${txt || aiResp.status}. Check server logs and ensure GEMINI_API_KEY is configured in server/.env.local`);
+          alert(`Gemini plan generation failed: ${txt || aiResp.status}. Check server logs and ensure GEMINI_API_KEY is configured.`);
         }
       } catch (e: any) {
         console.error('Gemini call failed', e);
         setActivePlan({ ...plan, rawAIResponse: { text: String(e?.message || e), candidates: null } });
-        alert(`Gemini call failed: ${String(e?.message || e)}. Check server logs.`);
+        alert(`Gemini call failed: ${String(e?.message || e)}.`);
       }
     } catch (error: any) {
       console.error(error);
@@ -202,8 +194,14 @@ export const useClimateOps = () => {
     }
   };
 
-  // Call server to generate an AI-enhanced plan (simulated Gemini) and set active plan
+  // Note: This function appears unused in current flow (startAnalysis handles the call)
+  // Kept for API consistency but marked as deprecated path
   const generateAIPlan = async () => {
+    if (!activePlan?.weather) {
+      alert('No weather data available. Run analysis first.');
+      return;
+    }
+    
     try {
       setLoading(true);
       setAgentStatus(AgentStatus.OBSERVING);
@@ -211,7 +209,7 @@ export const useClimateOps = () => {
       const payload = {
         location,
         floodPolygons: activePlan?.floodPolygons || [],
-        weather: activePlan?.weather || null,
+        weather: activePlan?.weather, 
         confidenceMetrics: activePlan?.confidenceMetrics || null
       };
 
@@ -219,10 +217,12 @@ export const useClimateOps = () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      
       if (!resp.ok) {
         const txt = await resp.text().catch(() => null);
         throw new Error(`AI generation failed: ${txt || resp.status}`);
       }
+      
       const plan = await resp.json();
       setActivePlan(plan);
       setAgentStatus(AgentStatus.IDLE);
@@ -269,6 +269,5 @@ export const useClimateOps = () => {
     startAnalysis,
     toggleCrisisMode,
     generateAIPlan,
-    // no key selector
   };
 };
