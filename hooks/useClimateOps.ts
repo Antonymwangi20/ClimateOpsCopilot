@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { AgentStatus, ClimatePlan } from '../types';
 import { fetchWeatherData } from '../services/weatherService';
 
+// API base URL: use env var for production, fallback to localhost:4000 for local dev
 const API_BASE = import.meta.env.VITE_WORKER_API || 'http://localhost:4000';
 
 export const useClimateOps = () => {
@@ -13,7 +14,16 @@ export const useClimateOps = () => {
   const [isCrisisEnabled, setIsCrisisEnabled] = useState(false);
   const [mapCenter, setMapCenter] = useState<[number, number]>([25.7617, -80.1918]);
 
-  // Geocoding effect remains unchanged (debounced)
+  // Clear active plan (and polygons) when user changes location
+  useEffect(() => {
+    if (activePlan && location !== activePlan.location) {
+      setActivePlan(null);
+      setAgentStatus(AgentStatus.IDLE);
+    }
+  }, [location, activePlan]);
+
+  // When the `location` text changes, attempt a lightweight geocode (Nominatim)
+  // and pan the map to the first result. Debounced to avoid spamming the API.
   useEffect(() => {
     if (!location || location.trim().length === 0) return;
     let cancelled = false;
@@ -32,16 +42,19 @@ export const useClimateOps = () => {
           if (!Number.isNaN(lat) && !Number.isNaN(lon)) setMapCenter([lat, lon]);
         }
       } catch (e) {
+        // ignore geocoding errors
         console.warn('Geocode failed', e);
       }
     }, 700);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [location]);
 
+
   const startAnalysis = async () => {
     setLoading(true);
     setAgentStatus(AgentStatus.OBSERVING);
     
+    // Fix: Destructure once at the top of the function scope
     const [lat, lon] = mapCenter;
     
     try {
@@ -104,7 +117,7 @@ export const useClimateOps = () => {
       }
       const polygonsData = await polygonsResp.json();
 
-      // 4) fetch weather 
+      // 4) fetch weather (SINGLE SOURCE OF TRUTH)
       setAgentStatus(AgentStatus.ACTING);
       const weather = await fetchWeatherData(lat, lon).catch(() => null);
 
@@ -166,7 +179,7 @@ export const useClimateOps = () => {
           body: JSON.stringify({ 
             location, 
             floodPolygons, 
-            weather: plan.weather, // Passed to server
+            weather: plan.weather,
             confidenceMetrics: plan.confidenceMetrics 
           })
         });
@@ -194,8 +207,6 @@ export const useClimateOps = () => {
     }
   };
 
-  // Note: This function appears unused in current flow (startAnalysis handles the call)
-  // Kept for API consistency but marked as deprecated path
   const generateAIPlan = async () => {
     if (!activePlan?.weather) {
       alert('No weather data available. Run analysis first.');
@@ -209,7 +220,7 @@ export const useClimateOps = () => {
       const payload = {
         location,
         floodPolygons: activePlan?.floodPolygons || [],
-        weather: activePlan?.weather, 
+        weather: activePlan?.weather,
         confidenceMetrics: activePlan?.confidenceMetrics || null
       };
 
