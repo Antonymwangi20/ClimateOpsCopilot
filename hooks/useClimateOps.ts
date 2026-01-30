@@ -121,6 +121,8 @@ export const useClimateOps = () => {
       setAgentStatus(AgentStatus.ACTING);
       const weather = await fetchWeatherData(lat, lon).catch(() => null);
 
+      console.log("Live weather from OpenWeather:", weather)
+
       const weatherConfidence = weather && (weather.temperature !== 0 || weather.rainfall !== '0mm') ? 70 : 45;
 
       // Build polygons for Leaflet (convert lon,lat → lat,lon)

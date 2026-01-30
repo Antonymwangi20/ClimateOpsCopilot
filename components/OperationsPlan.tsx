@@ -46,7 +46,7 @@ export const OperationsPlan: React.FC<OperationsPlanProps> = ({ activePlan }) =>
   if (!activePlan) return (
     <div className="flex-1 flex flex-col items-center justify-center p-8 bg-white rounded-2xl border border-dashed border-slate-200 text-slate-300">
       <AlertTriangle className="w-12 h-12 mb-4 opacity-10" />
-      <p className="text-center text-xs font-bold uppercase tracking-widest">Initialize Operational Loop</p>
+      <p className="text-center text-xs font-bold uppercase tracking-widest">Start Analysis</p>
     </div>
   );
 
