@@ -155,10 +155,31 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
             summary: { type: Type.STRING },
             reasoningTrace: { type: Type.STRING },
             overallConfidence: { type: Type.NUMBER },
-            weather: { type: Type.OBJECT },
-            floodPolygons: { type: Type.ARRAY },
-            confidenceMetrics: { type: Type.OBJECT },
-            checklists: { type: Type.ARRAY }
+            weather: { 
+              type: Type.OBJECT,
+              properties: {
+                temperature: { type: Type.NUMBER },
+                rainfall: { type: Type.STRING },
+                windSpeed: { type: Type.STRING },
+                windDirection: { type: Type.STRING }
+              }
+            },
+            floodPolygons: { 
+              type: Type.ARRAY,
+              items: { type: Type.OBJECT }
+            },
+            confidenceMetrics: { 
+              type: Type.OBJECT,
+              properties: {
+                satellite: { type: Type.NUMBER },
+                weather: { type: Type.NUMBER },
+                documents: { type: Type.NUMBER }
+              }
+            },
+            checklists: { 
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
           },
           required: ['riskLevel','summary','reasoningTrace']
         }

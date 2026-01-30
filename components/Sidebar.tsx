@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Upload, RefreshCcw, Zap, Thermometer, Wind, Droplets } from 'lucide-react';
+import { Upload, RefreshCcw, Thermometer, Wind, Droplets } from 'lucide-react';
 import { AgentLoopIndicator } from './UIComponents';
 import { AgentStatus, ClimatePlan } from '../types';
 
@@ -32,9 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-80 flex-shrink-0 bg-white border-r border-slate-200 p-6 overflow-y-auto space-y-6">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg shadow-blue-200 shadow-lg">
-            <Zap className="text-white w-6 h-6" />
-          </div>
+          <img src="/favicon.svg" alt="Climate Ops" className="w-8 h-8"/>
           <h1 className="font-bold text-xl tracking-tight text-slate-800">Climate Ops</h1>
         </div>
       </div>
