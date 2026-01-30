@@ -11,14 +11,18 @@ async function readRasterGrid(filename) {
   if (!fs.existsSync(inputPath)) throw new Error('Input file not found: ' + filename);
 
   const buffer = await fs.promises.readFile(inputPath);
+  console.log(`[readRasterGrid] Read ${buffer.length} bytes from ${filename}`);
 
   // Use sharp (supports GeoTIFF, PNG, JPEG etc.) and produce luminance grid
   try {
-    const img = sharp(buffer).ensureAlpha();
+    const img = sharp(buffer);
     const metadata = await img.metadata();
+    console.log(`[readRasterGrid] Image metadata:`, { format: metadata.format, width: metadata.width, height: metadata.height, channels: metadata.channels });
+    
     const { width, height } = metadata;
     if (!width || !height) throw new Error('Unable to get image dimensions');
-    const raw = await img.raw().toBuffer();
+    
+    const raw = await img.ensureAlpha().raw().toBuffer();
     const channels = metadata.channels || 3;
     const grid = new Array(height);
     for (let y = 0; y < height; y++) grid[y] = new Array(width);
@@ -33,9 +37,11 @@ async function readRasterGrid(filename) {
       }
     }
     // No georeferencing; caller may supply bbox mapping
+    console.log(`[readRasterGrid] Generated grid: ${width}x${height}`);
     return { grid, width, height, bbox: null };
   } catch (e) {
     console.error('Failed to read raster with sharp:', e?.message || e);
+    console.error('File size:', buffer.length, 'First 100 bytes:', buffer.slice(0, 100).toString('hex'));
     throw new Error('Unable to read image file: ' + e?.message);
   }
 }
@@ -67,18 +73,26 @@ function contoursToPolygons(contours, width, height, bbox) {
 }
 
 export async function generatePolygons({ filename, threshold = 128, minArea = 10, bbox: suppliedBbox = null }) {
+  console.log(`[generatePolygons] Starting with filename=${filename}, threshold=${threshold}, minArea=${minArea}`);
   const { grid, width, height, bbox } = await readRasterGrid(filename);
+  console.log(`[generatePolygons] Grid loaded: ${width}x${height}`);
 
   // Use MarchingSquares to extract contours at threshold
   const contours = MarchingSquares.isoContours(grid, threshold);
+  console.log(`[generatePolygons] Found ${contours.length} contours at threshold ${threshold}`);
 
   const effectiveBbox = bbox || suppliedBbox || null;
   const rawPolygons = contoursToPolygons(contours, width, height, effectiveBbox);
+  console.log(`[generatePolygons] Converted to ${rawPolygons.length} polygons`);
 
   const features = rawPolygons
     .map((p) => ({ feature: p, area: turf.area(p) }))
     .filter((x) => x.area >= minArea)
     .map((x) => x.feature);
+  
+  console.log(`[generatePolygons] Filtered to ${features.length} features with area >= ${minArea}`);
 
-  return turf.featureCollection(features.map((f) => (f.geometry ? f : f)));
+  const result = turf.featureCollection(features.map((f) => (f.geometry ? f : f)));
+  console.log(`[generatePolygons] Returning feature collection with ${result.features.length} features`);
+  return result;
 }
