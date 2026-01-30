@@ -22,6 +22,7 @@ export interface ClimatePlan {
     windSpeed: string;
     windDirection: string;
   };
+  nextSteps: string[]; // Risk and confidence-aware next steps
   checklists: {
     title: string;
     items: { task: string; priority: 'LOW' | 'MEDIUM' | 'HIGH'; completed: boolean }[];

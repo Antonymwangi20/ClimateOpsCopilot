@@ -134,12 +134,24 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
     const systemInstruction = `
       MISSION: Generate a climate operations plan for ${location}.
       CURRENT WEATHER: ${weather?.description || 'unknown'}, Temp ${weather?.temperature || 'N/A'}°C, Rain ${weather?.rainfall || 'N/A'}.
-      RETURN: JSON matching schema with riskLevel, summary, reasoningTrace, overallConfidence, weather, floodPolygons, confidenceMetrics, checklists.
+      
+      RESPONSE FORMAT: Return a JSON object with:
+      - riskLevel: 'CRITICAL' (high risk, high confidence) | 'HIGH' (high risk) | 'MEDIUM' (moderate) | 'LOW' (low risk)
+      - summary: Brief 1-2 sentence overview of the situation
+      - reasoningTrace: Your analysis of the data and how you arrived at the risk level
+      - overallConfidence: 0-100 confidence score
+      - nextSteps: Array of 3-5 actionable steps tailored to the risk level and confidence:
+        * If CRITICAL: Emergency response and immediate action items
+        * If HIGH: Urgent preventive measures and monitoring
+        * If MEDIUM: Monitoring and preparation steps
+        * If LOW: Standard monitoring and maintenance
+      - weather, floodPolygons, confidenceMetrics as provided
+      - checklists: Actionable checklist items
     `;
 
-    const parts = [{ text: `Analyze ${location} and create an operations plan.` }];
+    const parts = [{ text: `Analyze ${location} and create an operations plan. Base the next steps on detected risk level and data confidence.` }];
     if (floodPolygons && floodPolygons.length > 0) {
-      parts.push({ text: `Detected ${floodPolygons.length} polygon(s).` });
+      parts.push({ text: `Detected ${floodPolygons.length} polygon(s) with potential flood risk.` });
     }
 
     const response = await ai.models.generateContent({
@@ -179,6 +191,10 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
             checklists: { 
               type: Type.ARRAY,
               items: { type: Type.STRING }
+            },
+            nextSteps: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
             }
           },
           required: ['riskLevel','summary','reasoningTrace']
@@ -200,6 +216,7 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       reasoningTrace: planData.reasoningTrace || JSON.stringify(planData).slice(0,100),
       overallConfidence: planData.overallConfidence || 50,
       weather: planData.weather || weather || { temperature: 0, rainfall: 'N/A', windSpeed: 'N/A', windDirection: 'N/A' },
+      nextSteps: planData.nextSteps || [],
       confidenceMetrics: planData.confidenceMetrics || confidenceMetrics || { satellite: 50, weather: 50, documents: 20 },
       checklists: planData.checklists || [],
       floodPolygons: planData.floodPolygons || floodPolygons || [],

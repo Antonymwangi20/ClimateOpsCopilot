@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, ExternalLink, BarChart3, Info, ShieldAlert, AlertTriangle } from 'lucide-react';
+import { FileText, ExternalLink, BarChart3, Info, ShieldAlert, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar } from 'recharts';
 import { ConfidenceMeter } from './UIComponents';
 import { ClimatePlan } from '../types';
@@ -60,6 +60,22 @@ export const OperationsPlan: React.FC<OperationsPlanProps> = ({ activePlan }) =>
         </h3>
         <p className="text-xs text-slate-600 leading-relaxed italic">"{activePlan.summary}"</p>
       </div>
+
+      {activePlan.nextSteps && activePlan.nextSteps.length > 0 && (
+        <div className="p-4 border-l-4 border-blue-500 bg-blue-50 rounded-lg">
+          <h3 className="text-xs font-bold text-blue-900 flex items-center gap-2 mb-3">
+            <CheckCircle2 className="w-4 h-4 text-blue-600" /> Next Steps
+          </h3>
+          <ol className="space-y-2">
+            {activePlan.nextSteps.map((step, idx) => (
+              <li key={idx} className="flex gap-3 text-xs">
+                <span className="font-bold text-blue-600 min-w-fit">{idx + 1}.</span>
+                <span className="text-slate-700 flex-1">{step}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       {activePlan.groundingUrls && activePlan.groundingUrls.length > 0 && (
         <div className="space-y-2">
