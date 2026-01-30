@@ -32,7 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-80 flex-shrink-0 bg-white border-r border-slate-200 p-6 overflow-y-auto space-y-6">
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">
-          <img src="/favicon.svg" alt="Climate Ops" className="w-18 h-18"/>
+          <img src="/favicon.svg" alt="Climate Ops" className="w-16 h-16"/>
           <h1 className="font-bold text-xl tracking-tight text-slate-800">Climate Ops</h1>
         </div>
       </div>
