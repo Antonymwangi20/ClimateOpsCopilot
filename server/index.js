@@ -182,13 +182,27 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
                 type: Type.OBJECT,
                 properties: {
                   type: { type: Type.STRING },
-                  geometry: { 
+                  geometry: {
                     type: Type.OBJECT,
-                    additionalProperties: true 
+                    properties: {
+                      type: { type: Type.STRING },
+                      coordinates: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.ARRAY,
+                          items: {
+                            type: Type.ARRAY,
+                            items: { type: Type.NUMBER }
+                          }
+                        }
+                      }
+                    }
                   },
-                  properties: { 
+                  properties: {
                     type: Type.OBJECT,
-                    additionalProperties: true 
+                    properties: {
+                      area: { type: Type.NUMBER }
+                    }
                   }
                 }
               }

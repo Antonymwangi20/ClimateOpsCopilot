@@ -99,7 +99,7 @@ export const LoadingOverlay: React.FC<{ loading: boolean; location: string }> = 
        <div className="bg-white p-8 rounded-3xl shadow-2xl border border-slate-100 flex flex-col items-center gap-5 text-center max-w-sm">
           <div className="relative">
             <div className="w-20 h-20 border-4 border-blue-600/10 border-t-blue-600 rounded-full animate-spin" />
-            <img src="/favicon.svg" alt="Climate Ops" className="absolute inset-0 m-auto w-20 h-20 animate-pulse" />
+            <img src="/favicon.svg" alt="Climate Ops" className="absolute inset-0 m-auto w-18 h-18 animate-pulse" />
           </div>
           <div>
             <h3 className="font-bold text-slate-800 text-lg">Agentic Reasoning Active</h3>
