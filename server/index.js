@@ -178,7 +178,14 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
             },
             floodPolygons: { 
               type: Type.ARRAY,
-              items: { type: Type.OBJECT }
+              items: { 
+                type: Type.OBJECT,
+                properties: {
+                  type: { type: Type.STRING },
+                  geometry: { type: Type.OBJECT },
+                  properties: { type: Type.OBJECT }
+                }
+              }
             },
             confidenceMetrics: { 
               type: Type.OBJECT,
