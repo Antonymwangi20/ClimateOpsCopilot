@@ -117,6 +117,8 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
 });
 
+app.set('trust proxy', 1);
+
 const weatherLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 weather requests per windowMs
@@ -296,10 +298,41 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       }
     });
 
-    const text = response.text || '{}';
+    // Defensive text extraction (handles function vs property, undefined, etc.)
+    const rawText = typeof response.text === 'function' 
+      ? response.text() 
+      : response.text || '{}';
+    
     const rawCandidates = response.candidates || null;
+    
+    // Strip markdown wrappers that Gemini sometimes adds despite responseMimeType
+    const cleanedText = rawText
+      .replace(/^```json\s*/g, '')
+      .replace(/^```\s*/g, '')
+      .replace(/```\s*$/g, '')
+      .trim();
+    
     let planData = {};
-    try { planData = JSON.parse(text); } catch (e) { console.error('Failed to parse Gemini response', e); }
+    try {
+      planData = JSON.parse(cleanedText);
+      // Sanity check log - remove after verification
+      console.log("Gemini parsed successfully:", {
+        risk: planData.riskLevel,
+        summary: planData.summary?.substring(0, 50),
+        steps: planData.nextSteps?.length,
+        confidence: planData.overallConfidence
+      });
+    } catch (e) {
+      console.error('Failed to parse Gemini response. Raw text was:', rawText.substring(0, 200));
+      // Graceful fallback so UI doesn't crash
+      planData = { 
+        riskLevel: 'MEDIUM', 
+        summary: 'AI response parsing failed. Using fallback assessment.',
+        reasoningTrace: `Parse error: ${e.message}. Raw: ${rawText.slice(0, 100)}`,
+        nextSteps: ['Verify satellite imagery manually', 'Check weather conditions', 'Contact field teams'],
+        overallConfidence: 30
+      };
+    }
 
     const plan = {
       id: Math.random().toString(36).substr(2,9),
@@ -329,7 +362,6 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
   }
 });
 
-// Note: simulated Gemini endpoint removed — use /api/gemini-plan (real model) or keep demo separately.
 
 // Debug token test endpoint (attempts to fetch a token using client credentials)
 app.post('/api/token-test', async (req, res) => {
@@ -438,6 +470,8 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
           console.log('Process API response status:', resp.status, 'size:', resp.data ? resp.data.length : 0);
           if (!resp.data || resp.data.length < 1000) {
             console.warn(`Response too small (${resp.data ? resp.data.length : 0} bytes) for date ${queryDate}`);
+            const errorText = resp.data.toString(); // Convert buffer to string
+            console.error(`Sentinel Hub error for ${queryDate}:`, errorText);
             return null;
           }
           return resp;
@@ -451,7 +485,7 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
       let resp = await tryFetchImagery(date, false);
       
       // If no data, try progressively older dates (7, 14, 21, 30 days back)
-      const fallbackOffsets = [7, 14, 21, 30, 45, 60];
+      const fallbackOffsets = [7, 14, 21, 30, 45, 60, 90];
       for (const offset of fallbackOffsets) {
         if (resp) break;
         const fallbackDate = new Date(date);
