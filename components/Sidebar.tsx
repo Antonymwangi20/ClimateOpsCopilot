@@ -66,7 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         <button disabled={loading} onClick={onStartAnalysis} className={`w-full py-3 rounded-xl font-bold text-sm transition-all shadow-lg ${loading ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-          {loading ? 'Reasoning...' : 'Initiate Operations Loop'}
+          {loading ? 'Reasoning...' : 'Start Analysis'}
         </button>
       </section>
 

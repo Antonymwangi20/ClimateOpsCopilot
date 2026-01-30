@@ -298,15 +298,14 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       }
     });
 
-    // Defensive text extraction (handles function vs property, undefined, etc.)
-    const rawText = typeof response.text === 'function' 
+    const responseText = typeof response.text === 'function' 
       ? response.text() 
-      : response.text || '{}';
+      : (response.text || '{}');
     
     const rawCandidates = response.candidates || null;
     
-    // Strip markdown wrappers that Gemini sometimes adds despite responseMimeType
-    const cleanedText = rawText
+    // Strip markdown wrappers that Gemini sometimes adds
+    const cleanedText = responseText
       .replace(/^```json\s*/g, '')
       .replace(/^```\s*/g, '')
       .replace(/```\s*$/g, '')
@@ -315,22 +314,12 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
     let planData = {};
     try {
       planData = JSON.parse(cleanedText);
-      // Sanity check log - remove after verification
-      console.log("Gemini parsed successfully:", {
-        risk: planData.riskLevel,
-        summary: planData.summary?.substring(0, 50),
-        steps: planData.nextSteps?.length,
-        confidence: planData.overallConfidence
-      });
     } catch (e) {
-      console.error('Failed to parse Gemini response. Raw text was:', rawText.substring(0, 200));
-      // Graceful fallback so UI doesn't crash
+      console.error('Failed to parse Gemini response. Raw was:', responseText.substring(0, 200));
       planData = { 
         riskLevel: 'MEDIUM', 
-        summary: 'AI response parsing failed. Using fallback assessment.',
-        reasoningTrace: `Parse error: ${e.message}. Raw: ${rawText.slice(0, 100)}`,
-        nextSteps: ['Verify satellite imagery manually', 'Check weather conditions', 'Contact field teams'],
-        overallConfidence: 30
+        summary: 'AI response parsing failed',
+        reasoningTrace: 'Parse error: ' + e.message
       };
     }
 
@@ -339,7 +328,7 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       timestamp: new Date().toISOString(),
       location: location || 'unknown',
       riskLevel: planData.riskLevel || 'MEDIUM',
-      summary: planData.summary || planData.description || 'No summary',
+      summary: planData.summary || 'No summary',
       reasoningTrace: planData.reasoningTrace || JSON.stringify(planData).slice(0,100),
       overallConfidence: planData.overallConfidence || 50,
       weather: planData.weather || weather || { temperature: 0, rainfall: 'N/A', windSpeed: 'N/A', windDirection: 'N/A' },
@@ -349,7 +338,7 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       floodPolygons: planData.floodPolygons || floodPolygons || [],
       groundingUrls: [],
       rawAIResponse: {
-        text,
+        text: responseText,  // <-- Use responseText here, not 'text'
         candidates: rawCandidates
       }
     };
@@ -496,7 +485,7 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
       }
 
       if (!resp) {
-        return res.status(500).json({ error: 'No Sentinel-2 imagery available for the requested location. Tried dates from ' + date + ' back to 60 days prior. The location may have cloud cover or insufficient satellite passes.' });
+        return res.status(500).json({ error: 'No Sentinel-2 imagery available for the requested location. Tried dates from ' + date + ' back to 90 days prior. The location may have cloud cover or insufficient satellite passes.' });
       }
 
       try {
