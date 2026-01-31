@@ -182,6 +182,7 @@ export const generateAgenticPlan = async (
     confidenceMetrics: planData.confidenceMetrics || { satellite: 0, weather: 0, documents: 0 },
     checklists: planData.checklists || [],
     floodPolygons: planData.floodPolygons || [],
+    nextSteps: planData.nextSteps || [],
     groundingUrls
   };
 };
