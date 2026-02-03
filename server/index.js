@@ -190,6 +190,49 @@ app.get('/api/config', (req, res) => {
 });
 
 // Real Gemini-backed plan generation (server-side bridge)
+// Utility to add timeout to promises
+function withTimeout(promise, timeoutMs, label = 'Operation') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+    )
+  ]);
+}
+
+// Utility for retrying Gemini API calls with exponential backoff
+async function callGeminiWithRetry(fn, retries = 2, delay = 1000, factor = 1.5, timeoutMs = 20000) {
+  try {
+    console.log(`[Gemini] Calling API with ${timeoutMs}ms timeout...`);
+    return await withTimeout(fn(), timeoutMs, 'Gemini API call');
+  } catch (error) {
+    const isNetworkError = error?.message?.includes('fetch failed') || 
+                          error?.message?.includes('ECONNREFUSED') ||
+                          error?.message?.includes('ETIMEDOUT') ||
+                          error?.message?.includes('timed out') ||
+                          error?.message?.includes('ENOTFOUND');
+    const isQuotaError = error?.message?.includes('429') || 
+                        error?.status === 'RESOURCE_EXHAUSTED' || 
+                        error?.message?.includes('quota');
+    
+    if (retries <= 0) {
+      console.error(`[Gemini] All retries exhausted. Final error: ${error?.message}`);
+      throw error;
+    }
+    
+    // For network errors, wait; for quota errors, wait longer
+    let waitTime = delay;
+    if (isQuotaError) waitTime = Math.max(delay, 10000);
+    if (isNetworkError) waitTime = Math.max(delay, 2000);
+    
+    const errorType = isQuotaError ? 'quota' : isNetworkError ? 'network' : 'other';
+    console.warn(`[Gemini] API call failed (${errorType}: ${error?.message}). Retrying in ${waitTime}ms... (${retries} retries left)`);
+    
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+    return callGeminiWithRetry(fn, retries - 1, waitTime * factor, factor, timeoutMs);
+  }
+}
+
 app.post('/api/gemini-plan', express.json(), async (req, res) => {
   try {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GENAI_API_KEY || process.env.API_KEY;
@@ -199,104 +242,67 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // Build system instruction with weather context
-    const systemInstruction = `
-      MISSION: Generate a climate operations plan for ${location}.
-      CURRENT WEATHER: ${weather?.description || 'unknown'}, Temp ${weather?.temperature || 'N/A'}°C, Rain ${weather?.rainfall || 'N/A'}.
-      
-      RESPONSE FORMAT: Return a JSON object with:
-      - riskLevel: 'CRITICAL' (high risk, high confidence) | 'HIGH' (high risk) | 'MEDIUM' (moderate) | 'LOW' (low risk)
-      - summary: Brief 1-2 sentence overview of the situation
-      - reasoningTrace: Your analysis of the data and how you arrived at the risk level
-      - overallConfidence: 0-100 confidence score
-      - nextSteps: Array of 3-5 actionable steps tailored to the risk level and confidence:
-        * If CRITICAL: Emergency response and immediate action items
-        * If HIGH: Urgent preventive measures and monitoring
-        * If MEDIUM: Monitoring and preparation steps
-        * If LOW: Standard monitoring and maintenance
-      - weather, floodPolygons, confidenceMetrics as provided
-      - checklists: Actionable checklist items
-    `;
+    // Build minimal system instruction to save tokens
+    const systemInstruction = `You are a climate operations analyzer. Analyze the provided data and return ONLY a JSON object with: riskLevel (CRITICAL|HIGH|MEDIUM|LOW), summary (brief 1-2 sentences), reasoningTrace (your analysis), overallConfidence (0-100), weather object, confidenceMetrics object, checklists array (strings), nextSteps array (strings). Return ONLY valid JSON.`;
 
-    const parts = [{ text: `Analyze ${location} and create an operations plan. Base the next steps on detected risk level and data confidence.` }];
-    if (floodPolygons && floodPolygons.length > 0) {
-      parts.push({ text: `Detected ${floodPolygons.length} polygon(s) with potential flood risk.` });
-    }
+    const parts = [{ text: `Analyze ${location}. Weather: ${weather?.description || 'unknown'}, ${weather?.temperature || 'N/A'}°C. Detected ${floodPolygons?.length || 0} flood polygons. Generate operations plan.` }];
 
-    const response = await ai.models.generateContent({
+    const responseJsonSchema = {
+      type: 'object',
+      properties: {
+        riskLevel: {
+          type: 'string',
+          description: 'Risk level: CRITICAL, HIGH, MEDIUM, or LOW',
+          enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+        },
+        summary: { type: 'string', description: 'Brief summary of the situation' },
+        reasoningTrace: { type: 'string', description: 'Analysis and reasoning' },
+        overallConfidence: { type: 'number', description: 'Confidence score 0-100' },
+        weather: {
+          type: 'object',
+          description: 'Current weather data',
+          properties: {
+            temperature: { type: 'number', description: 'Temperature in Celsius' },
+            rainfall: { type: 'string', description: 'Rainfall description' },
+            windSpeed: { type: 'string', description: 'Wind speed' },
+            windDirection: { type: 'string', description: 'Wind direction' },
+            description: { type: 'string', description: 'Weather description' }
+          }
+        },
+        confidenceMetrics: {
+          type: 'object',
+          description: 'Confidence metrics for different data sources',
+          properties: {
+            satellite: { type: 'number', description: 'Satellite data confidence 0-100' },
+            weather: { type: 'number', description: 'Weather data confidence 0-100' },
+            documents: { type: 'number', description: 'Document data confidence 0-100' }
+          }
+        },
+        checklists: {
+          type: 'array',
+          description: 'Action checklists',
+          items: { type: 'string', description: 'Checklist item' }
+        },
+        nextSteps: {
+          type: 'array',
+          description: 'Recommended next steps',
+          items: { type: 'string', description: 'Next step' }
+        }
+      },
+      required: ['riskLevel', 'summary', 'reasoningTrace']
+    };
+
+    console.log('[Gemini] Using schema:', JSON.stringify(responseJsonSchema, null, 2));
+
+    const response = await callGeminiWithRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: { parts },
+      contents: [{ role: 'user', parts }],
       config: {
         systemInstruction,
         responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            riskLevel: { type: Type.STRING },
-            summary: { type: Type.STRING },
-            reasoningTrace: { type: Type.STRING },
-            overallConfidence: { type: Type.NUMBER },
-            weather: { 
-              type: Type.OBJECT,
-              properties: {
-                temperature: { type: Type.NUMBER },
-                rainfall: { type: Type.STRING },
-                windSpeed: { type: Type.STRING },
-                windDirection: { type: Type.STRING }
-              }
-            },
-            floodPolygons: { 
-              type: Type.ARRAY,
-              items: { 
-                type: Type.OBJECT,
-                properties: {
-                  type: { type: Type.STRING },
-                  geometry: {
-                    type: Type.OBJECT,
-                    properties: {
-                      type: { type: Type.STRING },
-                      coordinates: {
-                        type: Type.ARRAY,
-                        items: {
-                          type: Type.ARRAY,
-                          items: {
-                            type: Type.ARRAY,
-                            items: { type: Type.NUMBER }
-                          }
-                        }
-                      }
-                    }
-                  },
-                  properties: {
-                    type: Type.OBJECT,
-                    properties: {
-                      area: { type: Type.NUMBER }
-                    }
-                  }
-                }
-              }
-            },
-            confidenceMetrics: { 
-              type: Type.OBJECT,
-              properties: {
-                satellite: { type: Type.NUMBER },
-                weather: { type: Type.NUMBER },
-                documents: { type: Type.NUMBER }
-              }
-            },
-            checklists: { 
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            nextSteps: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            }
-          },
-          required: ['riskLevel','summary','reasoningTrace']
-        }
+        responseJsonSchema
       }
-    });
+    }), 2, 1000, 1.5, 25000);
 
     const responseText = typeof response.text === 'function' 
       ? response.text() 
@@ -335,10 +341,10 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       nextSteps: planData.nextSteps || [],
       confidenceMetrics: planData.confidenceMetrics || confidenceMetrics || { satellite: 50, weather: 50, documents: 20 },
       checklists: planData.checklists || [],
-      floodPolygons: planData.floodPolygons || floodPolygons || [],
+      floodPolygons: floodPolygons || [],
       groundingUrls: [],
       rawAIResponse: {
-        text: responseText,  // <-- Use responseText here, not 'text'
+        text: responseText,
         candidates: rawCandidates
       }
     };
@@ -346,8 +352,21 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
     io.emit('ai-plan', plan);
     return res.json(plan);
   } catch (e) {
-    console.error('gemini-plan failed', e?.message || e);
-    return res.status(500).json({ error: 'Gemini plan generation failed', detail: String(e) });
+    const isQuotaError = e?.message?.includes('quota') || e?.message?.includes('RESOURCE_EXHAUSTED') || e?.message?.includes('429');
+    console.error('gemini-plan failed exception', e?.message || e);
+    
+    if (isQuotaError) {
+      return res.status(429).json({ 
+        error: 'Gemini API quota exceeded', 
+        detail: 'Free tier quota has been exhausted. Please upgrade your plan or wait until tomorrow for quota reset.',
+        waitTime: 'Check Google Cloud Console for exact reset time'
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: 'Gemini plan generation failed', 
+      detail: String(e?.message || e) 
+    });
   }
 });
 

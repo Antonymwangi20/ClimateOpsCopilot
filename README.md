@@ -11,7 +11,7 @@ A full-stack climate operations assistant that ingests satellite imagery, prepro
 ## Architecture
 - **Frontend** (root): `index.tsx`, `App.tsx`, `components/*` (Map, Sidebar, Operations Plan, UI components).
 - **Backend** (server): `server/index.js` (Express + Socket.IO), `server/preprocess.js`, `server/polygons.js`.
-- **Services**: `services/weatherService.ts` (OpenWeather), `services/geminiService.ts` (browser-side SDK optional).
+- **Services**: `services/weatherService.ts` (OpenWeather).
 - **Storage**: Cloud-native (Cloudflare R2) in production; local `data/` dir in development.
 
 ## Local Development
