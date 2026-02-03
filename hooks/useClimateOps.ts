@@ -109,7 +109,7 @@ export const useClimateOps = () => {
       setAgentStatus(AgentStatus.DECIDING);
       const polygonsResp = await fetch(`${API_BASE}/api/polygons`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: processedFilename })
+        body: JSON.stringify({ filename: processedFilename, bbox, minArea: 100000 })
       });
       if (!polygonsResp.ok) {
         const txt = await polygonsResp.text().catch(() => null);
@@ -180,7 +180,7 @@ export const useClimateOps = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             location, 
-            floodPolygons, 
+            polygonCount: floodPolygons.length,
             weather: plan.weather,
             confidenceMetrics: plan.confidenceMetrics 
           })
@@ -188,7 +188,14 @@ export const useClimateOps = () => {
         
         if (aiResp.ok) {
           const aiPlan = await aiResp.json();
-          setActivePlan(aiPlan);
+          setActivePlan({
+            ...plan,
+            ...aiPlan,
+            floodPolygons: plan.floodPolygons,
+            confidenceMetrics: aiPlan.confidenceMetrics || plan.confidenceMetrics,
+            weather: aiPlan.weather || plan.weather,
+            groundingUrls: aiPlan.groundingUrls || plan.groundingUrls,
+          });
         } else {
           const txt = await aiResp.text().catch(() => null);
           console.warn('Gemini plan generation failed:', txt || aiResp.status);
@@ -221,7 +228,7 @@ export const useClimateOps = () => {
 
       const payload = {
         location,
-        floodPolygons: activePlan?.floodPolygons || [],
+        polygonCount: (activePlan?.floodPolygons || []).length,
         weather: activePlan?.weather,
         confidenceMetrics: activePlan?.confidenceMetrics || null
       };
@@ -237,7 +244,14 @@ export const useClimateOps = () => {
       }
       
       const plan = await resp.json();
-      setActivePlan(plan);
+      setActivePlan({
+        ...activePlan,
+        ...plan,
+        floodPolygons: activePlan?.floodPolygons || [],
+        confidenceMetrics: plan.confidenceMetrics || activePlan?.confidenceMetrics,
+        weather: plan.weather || activePlan?.weather,
+        groundingUrls: plan.groundingUrls || activePlan?.groundingUrls,
+      });
       setAgentStatus(AgentStatus.IDLE);
       return plan;
     } catch (e: any) {

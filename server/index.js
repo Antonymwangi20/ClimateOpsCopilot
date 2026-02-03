@@ -238,14 +238,17 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GENAI_API_KEY || process.env.API_KEY;
     if (!apiKey) return res.status(400).json({ error: 'GEMINI_API_KEY not configured on server' });
 
-    const { location, floodPolygons, weather, confidenceMetrics } = req.body || {};
+    const { location, floodPolygons, polygonCount, weather, confidenceMetrics } = req.body || {};
+    const effectivePolygonCount = (typeof polygonCount === 'number' && Number.isFinite(polygonCount))
+      ? polygonCount
+      : (Array.isArray(floodPolygons) ? floodPolygons.length : 0);
 
     const ai = new GoogleGenAI({ apiKey });
 
     // Build minimal system instruction to save tokens
     const systemInstruction = `You are a climate operations analyzer. Analyze the provided data and return ONLY a JSON object with: riskLevel (CRITICAL|HIGH|MEDIUM|LOW), summary (brief 1-2 sentences), reasoningTrace (your analysis), overallConfidence (0-100), weather object, confidenceMetrics object, checklists array (strings), nextSteps array (strings). Return ONLY valid JSON.`;
 
-    const parts = [{ text: `Analyze ${location}. Weather: ${weather?.description || 'unknown'}, ${weather?.temperature || 'N/A'}°C. Detected ${floodPolygons?.length || 0} flood polygons. Generate operations plan.` }];
+    const parts = [{ text: `Analyze ${location}. Weather: ${weather?.description || 'unknown'}, ${weather?.temperature || 'N/A'}°C. Detected ${effectivePolygonCount} flood polygons. Generate operations plan.` }];
 
     const responseJsonSchema = {
       type: 'object',
@@ -581,10 +584,10 @@ app.post('/api/preprocess', async (req, res) => {
 
 // Polygons extraction endpoint
 app.post('/api/polygons', async (req, res) => {
-  const { filename, threshold = 128, minArea = 10, bbox } = req.body || {};
+  const { filename, threshold = 128, minArea = 100000, bbox } = req.body || {};
   if (!filename) return res.status(400).json({ ok: false, error: 'Missing filename in body' });
   try {
-    const key = `${filename}|${threshold}|${minArea}`;
+    const key = `${filename}|${threshold}|${minArea}|${JSON.stringify(bbox || null)}`;
     const cached = getCached(polygonsCache, key);
     if (cached) {
       const payload = { ok: true, collection: cached };
