@@ -14,6 +14,7 @@ import rateLimit from 'express-rate-limit';
 
 import { preprocessFile } from './preprocess.js';
 import { generatePolygons } from './polygons.js';
+import { ingestBest, preCacheAOIs, DEFAULT_SOURCES } from './ingestor.js';
 
 const weatherCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -243,6 +244,33 @@ app.post('/api/gemini-plan', express.json(), async (req, res) => {
       ? polygonCount
       : (Array.isArray(floodPolygons) ? floodPolygons.length : 0);
 
+    // Short-circuit: if there is no detected spatial signal, return a deterministic
+    // low-risk plan and DO NOT call the LLM. This prevents the AI from inventing
+    // hazards when satellite detection produced no features.
+    if (effectivePolygonCount === 0) {
+      const plan = {
+        id: Math.random().toString(36).substr(2,9),
+        timestamp: new Date().toISOString(),
+        location: location || 'unknown',
+        riskLevel: 'LOW',
+        summary: 'No significant anomalies detected in satellite imagery.',
+        reasoningTrace: 'Raster analysis produced no contiguous regions above detection thresholds; skipping LLM.',
+        overallConfidence: 65,
+        weather: weather || { temperature: null, rainfall: 'N/A', windSpeed: 'N/A', windDirection: 'N/A', description: 'unknown' },
+        nextSteps: [
+          'Monitor and re-run ingestion at next available satellite pass',
+          'If persistent clouds, request Sentinel-1 (SAR) analysis or task drone imagery'
+        ],
+        confidenceMetrics: confidenceMetrics || { satellite: 40, weather: 80, documents: 20 },
+        checklists: [],
+        floodPolygons: floodPolygons || [],
+        groundingUrls: [],
+        rawAIResponse: null
+      };
+      io.emit('ai-plan', plan);
+      return res.json(plan);
+    }
+
     const ai = new GoogleGenAI({ apiKey });
 
     // Build minimal system instruction to save tokens
@@ -445,7 +473,10 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
 
     if (sentinelHubUrl && tokenToUse) {
       // Build a minimal process request. Users can customize evalscript via env or extend this code.
-      const evalscript = process.env.SENTINELHUB_EVALSCRIPT || `//VERSION=3\nfunction setup() {return {input:[{bands:["B04","B03","B02"],units:"REFLECTANCE"}],output:{bands:3}};}\nfunction evaluatePixel(sample){return [sample.B04, sample.B03, sample.B02];}`;
+      // Default evalscript: compute NDWI (Green - NIR) / (Green + NIR) and return a
+      // single-band image scaled to 0-255 where 128 ~= NDWI 0. This makes server-side
+      // thresholding deterministic and avoids contouring RGB noise.
+      const evalscript = process.env.SENTINELHUB_EVALSCRIPT || `//VERSION=3\nfunction setup() {return {input:[{bands:["B03","B08"],units:"REFLECTANCE"}],output:{bands:1}};}\nfunction evaluatePixel(sample){const g=sample.B03;const nir=sample.B08;const ndwi=(g-nir)/(g+nir+1e-6);const scaled=Math.round((ndwi+1.0)*127.5);return [scaled];}`;
 
       const buildBody = (queryDate) => ({
         input: {
@@ -479,12 +510,29 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
           });
 
           console.log('Process API response status:', resp.status, 'size:', resp.data ? resp.data.length : 0);
-          if (!resp.data || resp.data.length < 1000) {
-            console.warn(`Response too small (${resp.data ? resp.data.length : 0} bytes) for date ${queryDate}`);
-            const errorText = resp.data.toString(); // Convert buffer to string
-            console.error(`Sentinel Hub error for ${queryDate}:`, errorText);
-            return null;
+          if (!resp.data) return null;
+          const buf = Buffer.from(resp.data);
+          // Log content-type to help diagnose small but valid images
+          try { console.log('[tryFetchImagery] content-type:', resp.headers && resp.headers['content-type']); } catch (e) {}
+
+          function isValidPNG(b) { return b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47; }
+          function isValidTIFF(b) { return b.length > 4 && ((b[0] === 0x49 && b[1] === 0x49) || (b[0] === 0x4D && b[1] === 0x4D)); }
+
+          const fmt = (body?.output?.responses?.[0]?.format?.type || '').toLowerCase();
+          if (fmt.includes('png')) {
+            if (!isValidPNG(buf)) {
+              console.warn(`Returned content not valid PNG for date ${queryDate}`);
+              return null;
+            }
+          } else if (fmt.includes('tiff') || fmt.includes('geotiff') || fmt.includes('tif')) {
+            if (!isValidTIFF(buf)) {
+              console.warn(`Returned content not valid TIFF for date ${queryDate}`);
+              return null;
+            }
+          } else {
+            if (buf.length === 0) return null;
           }
+
           return resp;
         } catch (err) {
           console.error(`Imagery fetch failed for ${queryDate}:`, err?.message || err);
@@ -507,7 +555,23 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
       }
 
       if (!resp) {
-        return res.status(500).json({ error: 'No Sentinel-2 imagery available for the requested location. Tried dates from ' + date + ' back to 90 days prior. The location may have cloud cover or insufficient satellite passes.' });
+        console.warn('No Sentinel-2 imagery found after fallback dates — attempting multi-source ingest fallback');
+        try {
+          const altSources = DEFAULT_SOURCES.filter((s) => s.id !== 'sentinel-2');
+          const altResult = await ingestBest({ sentinelHubUrl, clientId, clientSecret, bbox, date, priority: altSources });
+          if (altResult && altResult.success) {
+            // Save and return altResult
+            const filename = altResult.filename || `ingest_${altResult.source}_${Date.now()}.tiff`;
+            // altResult.filePath already saved by ingestSource, so return its metadata
+            const payload = { ok: true, source: altResult.source, path: altResult.data_uri || `/data/${filename}`, filePath: altResult.filePath };
+            io.emit('new-image', payload);
+            return res.json(payload);
+          }
+        } catch (e) {
+          console.warn('Multi-source ingest fallback failed:', e?.message || e);
+        }
+
+        return res.status(500).json({ error: 'No Sentinel-2 imagery available for the requested location. Tried dates from ' + date + ' back to 90 days prior, and fallback sources failed.' });
       }
 
       try {
@@ -547,6 +611,33 @@ app.post('/api/ingest', upload.single('image'), async (req, res) => {
   } catch (err) {
     console.error('Ingest error', err);
     return res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// New: Orchestrated best-available ingest with multi-source fallback
+app.post('/api/ingest-best', async (req, res) => {
+  const { bbox, date, sources } = req.body || {};
+  if (!bbox || !Array.isArray(bbox) || bbox.length !== 4) return res.status(400).json({ error: 'Missing or invalid bbox' });
+  if (!date) return res.status(400).json({ error: 'Missing date (YYYY-MM-DD)' });
+
+  const sentinelHubUrl = process.env.SENTINELHUB_PROCESSING_URL || process.env.SENTINEL_HUB_PROCESSING_URL;
+  const clientId = process.env.SENTINEL_HUB_CLIENT_ID;
+  const clientSecret = process.env.SENTINEL_HUB_CLIENT_SECRET;
+
+  if (!sentinelHubUrl) return res.status(500).json({ error: 'Sentinel Hub URL not configured' });
+  if (!clientId || !clientSecret) return res.status(500).json({ error: 'Sentinel Hub client credentials not configured' });
+
+  try {
+    const priority = Array.isArray(sources) && sources.length > 0 ? sources : DEFAULT_SOURCES;
+    const result = await ingestBest({ sentinelHubUrl, clientId, clientSecret, bbox, date, priority });
+    if (!result || !result.success) return res.status(404).json({ ok: false, error: 'No imagery available for requested date and bbox' });
+    // Emit same event so frontend can react
+    const payload = { ok: true, source: result.source, data_uri: result.data_uri, filePath: result.filePath, timestamp: result.timestamp };
+    io.emit('new-image', payload);
+    return res.json(payload);
+  } catch (e) {
+    console.error('ingest-best failed', e?.message || e);
+    return res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
